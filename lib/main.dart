@@ -8,9 +8,11 @@ import 'package:smartdoc/theme/app_theme.dart';
 import 'package:smartdoc/theme/theme_service.dart';
 import 'firebase_options.dart';
 import 'package:smartdoc/screens/document_detail_screen.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,

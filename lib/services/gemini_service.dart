@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class GeminiService {
-  // 🔑 Replace with your actual Gemini API key from https://aistudio.google.com/
-  static const String apiKey = 'YOUR_GEMINI_API_KEY';
+  // 🔑 Get actual Gemini API key from .env file
+  static String get apiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
 
   static const String modelName = 'gemini-2.5-flash';
 
