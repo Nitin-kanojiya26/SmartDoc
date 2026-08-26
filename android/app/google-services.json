@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1001400212275",
+    "project_id": "smartdoc-bf7a3",
+    "storage_bucket": "smartdoc-bf7a3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1001400212275:android:d904598eab028a4d03fc46",
+        "android_client_info": {
+          "package_name": "com.example.smartdoc"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDSrGInPSAJpmVvy3TIwV6CI5FFn7QEgMo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
