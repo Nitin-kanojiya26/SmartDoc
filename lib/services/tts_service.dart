@@ -116,7 +116,11 @@ class TtsService {
   static double getPitch() => _currentPitch;
 
   static Future<void> speak(String text, {double? rate, double? pitch}) async {
-    final cleanText = text.trim();
+    // Clean markdown characters that might break TTS or sound unnatural
+    String cleanText = text.replaceAll(RegExp(r'[*#_]'), '').trim();
+    // Also clean multiple spaces or newlines
+    cleanText = cleanText.replaceAll(RegExp(r'\n+'), ' ').replaceAll(RegExp(r'\s+'), ' ');
+    
     if (cleanText.isEmpty) return;
 
     if (!_isInitialized) {
@@ -138,7 +142,20 @@ class TtsService {
       }
 
       _state = TtsState.playing;
-      await _tts.speak(cleanText);
+
+      // For long text, chunking reduces the initial delay before speaking starts
+      // Android TTS has a limit and takes longer to synthesize large blocks
+      if (cleanText.length > 3000) {
+        // Simple chunking by sentences
+        List<String> chunks = cleanText.split(RegExp(r'(?<=[.!?])\s+'));
+        for (String chunk in chunks) {
+          if (chunk.isNotEmpty && _state == TtsState.playing) {
+             await _tts.speak(chunk);
+          }
+        }
+      } else {
+        await _tts.speak(cleanText);
+      }
     } catch (e) {
       _state = TtsState.stopped;
       debugPrint('TTS speak error: $e');

@@ -73,18 +73,26 @@ class CategoryService {
       'resume', 'cv', 'cover', 'letter', 'personal', 'bio', 'profile',
       'portfolio', 'application', 'job', 'career', 'experience', 'references'
     ],
+    'Summary': [
+      'summary', 'overview', 'synopsis'
+    ],
   };
 
   static Map<String, int> getCategoryScores(String text, {Map<String, List<String>>? customCategories}) {
-    final lower = text.toLowerCase();
+    // Limit text length for efficiency, categorization doesn't need the whole book
+    final String sampleText = text.length > 10000 ? text.substring(0, 10000) : text;
+    final lower = sampleText.toLowerCase();
     final scores = <String, int>{};
+    
+    // Use a tokenized approach to avoid false positives and speed up matching
+    final words = lower.split(RegExp(r'\s+')).toSet();
     
     // Check custom categories first
     if (customCategories != null) {
       for (var entry in customCategories.entries) {
         int count = 0;
         for (var keyword in entry.value) {
-          if (lower.contains(keyword)) count++;
+          if (words.contains(keyword) || lower.contains(keyword)) count++;
         }
         if (count > 0) scores[entry.key] = count;
       }
@@ -94,7 +102,7 @@ class CategoryService {
     for (var entry in categoryKeywords.entries) {
       int count = 0;
       for (var keyword in entry.value) {
-        if (lower.contains(keyword)) count++;
+        if (words.contains(keyword) || (keyword.contains(' ') && lower.contains(keyword))) count++;
       }
       if (count > 0) scores[entry.key] = count;
     }

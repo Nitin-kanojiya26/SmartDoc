@@ -1,9 +1,15 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:smartdoc/services/tts_service.dart';
 import 'package:smartdoc/services/gemini_service.dart';
+import 'package:smartdoc/services/database_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 class DocumentActionPopup extends StatefulWidget {
   final String fileName;
@@ -39,13 +45,17 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
 
   // Q&A State
   final TextEditingController _questionController = TextEditingController();
-  String _answer = '';
+  List<Map<String, String>> _chatHistory = [];
   bool _loadingAnswer = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      setState(() {});
+    });
+    
     _speed = TtsService.getRate();
     _pitch = TtsService.getPitch();
 
@@ -56,6 +66,59 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
         });
       }
     });
+
+    _loadCachedData();
+  }
+
+  Future<void> _loadCachedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Load Summary
+    final summaryCached = prefs.getString('summary_${widget.fileName}');
+    final summaryTimestamp = prefs.getInt('summary_time_${widget.fileName}');
+    
+    if (summaryCached != null && summaryTimestamp != null) {
+      final savedTime = DateTime.fromMillisecondsSinceEpoch(summaryTimestamp);
+      if (DateTime.now().difference(savedTime).inHours < 12) {
+        if (mounted) {
+          setState(() {
+            _summary = summaryCached;
+          });
+        }
+      } else {
+        await prefs.remove('summary_${widget.fileName}');
+        await prefs.remove('summary_time_${widget.fileName}');
+      }
+    }
+
+    // Load Chat
+    final chatHistoryJson = prefs.getString('chat_history_${widget.fileName}');
+    final chatTimestamp = prefs.getInt('chat_time_${widget.fileName}');
+
+    if (chatHistoryJson != null && chatTimestamp != null) {
+      final savedTime = DateTime.fromMillisecondsSinceEpoch(chatTimestamp);
+      if (DateTime.now().difference(savedTime).inHours < 12) {
+        if (mounted) {
+          setState(() {
+            try {
+              final List<dynamic> decoded = jsonDecode(chatHistoryJson);
+              _chatHistory = decoded.map((e) => Map<String, String>.from(e)).toList();
+            } catch (e) {
+              _chatHistory = [];
+            }
+          });
+        }
+      } else {
+        await prefs.remove('chat_history_${widget.fileName}');
+        await prefs.remove('chat_time_${widget.fileName}');
+      }
+    }
+  }
+
+  Future<void> _saveCachedSummary(String summaryText) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('summary_${widget.fileName}', summaryText);
+    await prefs.setInt('summary_time_${widget.fileName}', DateTime.now().millisecondsSinceEpoch);
   }
 
   @override
@@ -70,11 +133,17 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     if (widget.extractedText.isEmpty) return;
     setState(() => _isSpeaking = true);
     await TtsService.speak(widget.extractedText, rate: _speed, pitch: _pitch);
+    if (mounted) {
+      setState(() => _isSpeaking = false);
+    }
   }
 
   void _pause() async {
     await TtsService.pause();
-    setState(() => _isSpeaking = false);
+    setState(() {
+      _isSpeaking = false;
+      _isSummarySpeaking = false;
+    });
   }
 
   void _stop() async {
@@ -89,6 +158,9 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     if (_summary.isEmpty) return;
     setState(() => _isSummarySpeaking = true);
     await TtsService.speak(_summary, rate: _speed, pitch: _pitch);
+    if (mounted) {
+      setState(() => _isSummarySpeaking = false);
+    }
   }
 
   Future<void> _generateSummary() async {
@@ -99,43 +171,147 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
         _summary = result;
         _loadingSummary = false;
       });
+      _saveCachedSummary(result);
     }
   }
 
   Future<void> _downloadSummary() async {
     if (_summary.isEmpty) return;
     try {
-      final directory = await getApplicationDocumentsDirectory();
-      final file = File(
-        '${directory.path}/summary_${DateTime.now().millisecondsSinceEpoch}.txt',
+      final pdf = pw.Document();
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          build: (pw.Context context) {
+            final String cleanedSummary = _summary
+                .replaceAll('–', '-')
+                .replaceAll('—', '-')
+                .replaceAll('’', "'")
+                .replaceAll('‘', "'")
+                .replaceAll('“', '"')
+                .replaceAll('”', '"')
+                .replaceAll('•', '*')
+                .replaceAll('…', '...')
+                .replaceAll(RegExp(r'[^\x00-\x7F]'), '');
+                
+            final String cleanedFileName = widget.fileName
+                .replaceAll(RegExp(r'[^\x00-\x7F]'), '');
+                
+            final List<pw.Widget> content = [
+              pw.Header(
+                level: 0,
+                child: pw.Text(
+                  'Summary of $cleanedFileName',
+                  style: pw.TextStyle(
+                    fontSize: 24,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+              ),
+              pw.SizedBox(height: 20),
+            ];
+
+            final paragraphs = cleanedSummary.split(RegExp(r'\n+'));
+            for (var p in paragraphs) {
+              if (p.trim().isEmpty) continue;
+              content.add(
+                pw.Paragraph(
+                  text: p.trim(),
+                  style: const pw.TextStyle(
+                    fontSize: 12,
+                    lineSpacing: 1.5,
+                  ),
+                ),
+              );
+            }
+
+            return content;
+          },
+        ),
       );
-      await file.writeAsString(_summary);
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: 'Summary of ${widget.fileName}',
-      );
+
+      final pdfBytes = await pdf.save();
+      
+      final docsDir = await getApplicationDocumentsDirectory();
+      final directory = Directory('${docsDir.path}/Summary');
+      if (!await directory.exists()) {
+        await directory.create(recursive: true);
+      }
+
+      final safeName = widget.fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final fileName = 'summary_$safeName.pdf';
+      final file = File('${directory.path}/$fileName');
+      await file.writeAsBytes(pdfBytes);
+      
+      // Automatically add it to the database under the 'Summary' category so it appears immediately!
+      await DatabaseService().upsertDocument({
+        'name': fileName,
+        'path': file.path,
+        'size': pdfBytes.length,
+        'category': 'Summary',
+        'is_override': 1, // Lock it to Summary category
+        'text_content': _summary, // Also save the summary as its text content
+        'last_opened': DateTime.now().millisecondsSinceEpoch,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Summary saved to your Categories!'),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 140,
+              left: 20,
+              right: 20,
+            ),
+            dismissDirection: DismissDirection.up,
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error saving summary: $e'),
+            content: Text('Error saving PDF: $e'),
             behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(
+              bottom: MediaQuery.of(context).size.height - 140,
+              left: 20,
+              right: 20,
+            ),
+            dismissDirection: DismissDirection.up,
           ),
         );
       }
     }
   }
 
+  Future<void> _saveCachedChat() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('chat_history_${widget.fileName}', jsonEncode(_chatHistory));
+    await prefs.setInt('chat_time_${widget.fileName}', DateTime.now().millisecondsSinceEpoch);
+  }
+
   Future<void> _askQuestion() async {
     final question = _questionController.text.trim();
     if (question.isEmpty) return;
-    setState(() => _loadingAnswer = true);
+    
+    setState(() {
+      _chatHistory.add({'role': 'user', 'text': question});
+      _questionController.clear();
+      _loadingAnswer = true;
+    });
+    
     final res = await GeminiService.askQuestion(widget.extractedText, question);
+    
     if (mounted) {
       setState(() {
-        _answer = res;
+        _chatHistory.add({'role': 'ai', 'text': res});
         _loadingAnswer = false;
       });
+      _saveCachedChat();
     }
   }
 
@@ -147,9 +323,10 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -191,8 +368,22 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _isSummarySpeaking ? _stop : _speakSummary,
-                    icon: Icon(_isSummarySpeaking ? Icons.pause : Icons.play_arrow_rounded, size: 18),
+                    onPressed: () async {
+                      if (_isSummarySpeaking) {
+                        _pause();
+                        setModalState(() {});
+                      } else {
+                        if (_summary.isEmpty) return;
+                        setModalState(() => _isSummarySpeaking = true);
+                        setState(() => _isSummarySpeaking = true);
+                        await TtsService.speak(_summary, rate: _speed, pitch: _pitch);
+                        if (mounted) {
+                          setModalState(() => _isSummarySpeaking = false);
+                          setState(() => _isSummarySpeaking = false);
+                        }
+                      }
+                    },
+                    icon: Icon(_isSummarySpeaking ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 18),
                     label: Text(_isSummarySpeaking ? 'Pause' : 'Listen'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.black,
@@ -210,6 +401,7 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -218,9 +410,9 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     final theme = Theme.of(context);
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.4,
-      minChildSize: 0.2,
-      maxChildSize: 0.85,
+      initialChildSize: 0.5,
+      minChildSize: 0.5,
+      maxChildSize: 1.0,
       builder: (context, scrollController) {
         return Container(
           decoration: BoxDecoration(
@@ -311,9 +503,9 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
                 child: TabBarView(
                   controller: _tabController,
                   children: [
-                    _buildReadAloudTab(),
-                    _buildSummarizeTab(),
-                    _buildAskTab(),
+                    _buildReadAloudTab(scrollController),
+                    _buildSummarizeTab(scrollController),
+                    _buildAskTab(scrollController),
                   ],
                 ),
               ),
@@ -324,9 +516,10 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     );
   }
 
-  Widget _buildReadAloudTab() {
+  Widget _buildReadAloudTab(ScrollController scrollController) {
     final theme = Theme.of(context);
     return SingleChildScrollView(
+      controller: _tabController.index == 0 ? scrollController : null,
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
@@ -412,9 +605,10 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     );
   }
 
-  Widget _buildSummarizeTab() {
+  Widget _buildSummarizeTab(ScrollController scrollController) {
     final theme = Theme.of(context);
     return SingleChildScrollView(
+      controller: _tabController.index == 1 ? scrollController : null,
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -536,12 +730,12 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _isSummarySpeaking ? _stop : _speakSummary,
+                      onPressed: _isSummarySpeaking ? _pause : _speakSummary,
                       icon: Icon(
-                        _isSummarySpeaking ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                        _isSummarySpeaking ? Icons.pause_rounded : Icons.play_arrow_rounded,
                         size: 16,
                       ),
-                      label: Text(_isSummarySpeaking ? 'Stop' : 'Listen'),
+                      label: Text(_isSummarySpeaking ? 'Pause' : 'Listen'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: theme.colorScheme.primary,
                         foregroundColor: theme.colorScheme.onPrimary,
@@ -560,78 +754,130 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     );
   }
 
-  Widget _buildAskTab() {
+  Widget _buildChatBubble(String role, String text) {
+    final isUser = role == 'user';
     final theme = Theme.of(context);
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.8,
+        ),
+        decoration: BoxDecoration(
+          color: isUser ? theme.colorScheme.primary : theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(16).copyWith(
+            bottomRight: isUser ? const Radius.circular(4) : const Radius.circular(16),
+            bottomLeft: !isUser ? const Radius.circular(4) : const Radius.circular(16),
+          ),
+          border: isUser ? null : Border.all(color: theme.colorScheme.outlineVariant),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: 14,
+            height: 1.5,
+            color: isUser ? theme.colorScheme.onPrimary : theme.textTheme.bodyMedium?.color,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingBubble() {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(16).copyWith(
+            bottomLeft: const Radius.circular(4),
+          ),
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+        ),
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.primary),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAskTab(ScrollController scrollController) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _tabController.index == 2 ? scrollController : null,
+            padding: const EdgeInsets.all(24),
+            itemCount: _chatHistory.length + (_loadingAnswer ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == _chatHistory.length) return _buildLoadingBubble();
+              final msg = _chatHistory[index];
+              return _buildChatBubble(msg['role']!, msg['text']!);
+            },
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.of(context).viewInsets.bottom > 0 
+                ? 16 
+                : 16 + MediaQuery.of(context).padding.bottom,
+          ),
+          child: Container(
             decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
+              color: theme.colorScheme.surfaceVariant ?? Colors.grey.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(24),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(
                   child: TextField(
                     controller: _questionController,
                     style: const TextStyle(fontSize: 14),
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
-                      hintText: 'Ask anything about the document...',
-                      hintStyle: TextStyle(fontSize: 13, color: theme.textTheme.bodySmall?.color),
+                      hintText: 'Message...',
+                      hintStyle: TextStyle(fontSize: 14, color: theme.textTheme.bodySmall?.color),
                       border: InputBorder.none,
+                      contentPadding: const EdgeInsets.only(bottom: 4),
                     ),
-                    onSubmitted: (_) => _askQuestion(),
                   ),
                 ),
+                const SizedBox(width: 8),
                 GestureDetector(
                   onTap: _loadingAnswer ? null : _askQuestion,
                   child: Container(
                     padding: const EdgeInsets.all(8),
+                    margin: const EdgeInsets.only(bottom: 2),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.primary,
+                      color: _questionController.text.trim().isNotEmpty ? Colors.blue : theme.colorScheme.outlineVariant,
                       shape: BoxShape.circle,
                     ),
-                    child: _loadingAnswer
-                        ? SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: theme.colorScheme.onPrimary,
-                      ),
-                    )
-                        : Icon(Icons.arrow_upward_rounded, size: 16, color: theme.colorScheme.onPrimary),
+                    child: Icon(
+                      Icons.arrow_upward_rounded, 
+                      size: 16, 
+                      color: _questionController.text.trim().isNotEmpty ? Colors.white : theme.textTheme.bodyMedium?.color,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          if (_answer.isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-              ),
-              child: Text(
-                _answer,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.5,
-                  color: theme.textTheme.bodyMedium?.color,
-                ),
-              ),
-            ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
