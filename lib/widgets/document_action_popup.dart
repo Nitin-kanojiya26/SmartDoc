@@ -14,12 +14,14 @@ import 'package:pdf/widgets.dart' as pw;
 class DocumentActionPopup extends StatefulWidget {
   final String fileName;
   final String extractedText;
+  final String? selectedText;
   final VoidCallback? onClose;
 
   const DocumentActionPopup({
     super.key,
     required this.fileName,
     required this.extractedText,
+    this.selectedText,
     this.onClose,
   });
 
@@ -43,10 +45,17 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
   bool _isSummarySpeaking = false;
   bool _detailedSummary = false;
 
+  // Selected Text for TTS
+  String _selectedTextForTts = '';
+
   // Q&A State
   final TextEditingController _questionController = TextEditingController();
   List<Map<String, String>> _chatHistory = [];
   bool _loadingAnswer = false;
+
+  // AI Limits
+  int _estimatedTotalPages = 1;
+  RangeValues _pageRange = const RangeValues(1, 1);
 
   @override
   void initState() {
@@ -56,6 +65,9 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
       setState(() {});
     });
     
+    _estimatedTotalPages = (widget.extractedText.length / 2500).ceil().clamp(1, 9999);
+    _pageRange = RangeValues(1, _estimatedTotalPages > 10 ? 10 : _estimatedTotalPages.toDouble());
+
     _speed = TtsService.getRate();
     _pitch = TtsService.getPitch();
 
@@ -130,9 +142,12 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
   }
 
   void _speak() async {
-    if (widget.extractedText.isEmpty) return;
+    final textToSpeak = (widget.selectedText != null && widget.selectedText!.isNotEmpty)
+        ? widget.selectedText!
+        : widget.extractedText;
+    if (textToSpeak.isEmpty) return;
     setState(() => _isSpeaking = true);
-    await TtsService.speak(widget.extractedText, rate: _speed, pitch: _pitch);
+    await TtsService.speak(textToSpeak, rate: _speed, pitch: _pitch);
     if (mounted) {
       setState(() => _isSpeaking = false);
     }
@@ -163,9 +178,23 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     }
   }
 
+  String _getTextToProcess() {
+    int startChar = (_pageRange.start.toInt() - 1) * 2500;
+    int endChar = _pageRange.end.toInt() * 2500;
+    
+    if (startChar < 0) startChar = 0;
+    if (endChar > widget.extractedText.length) endChar = widget.extractedText.length;
+    
+    if (startChar >= widget.extractedText.length) return '';
+    
+    return widget.extractedText.substring(startChar, endChar) + 
+           ((endChar < widget.extractedText.length) ? '\n\n[...TEXT TRUNCATED DUE TO PAGE LIMIT...]' : '');
+  }
+
   Future<void> _generateSummary() async {
     setState(() => _loadingSummary = true);
-    final result = await GeminiService.summarizeText(widget.extractedText);
+    final text = _getTextToProcess();
+    final result = await GeminiService.summarizeText(text);
     if (mounted) {
       setState(() {
         _summary = result;
@@ -304,7 +333,8 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
       _loadingAnswer = true;
     });
     
-    final res = await GeminiService.askQuestion(widget.extractedText, question);
+    final text = _getTextToProcess();
+    final res = await GeminiService.askQuestion(text, question);
     
     if (mounted) {
       setState(() {
@@ -405,6 +435,81 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     );
   }
 
+  void _showApiKeyDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentKey = prefs.getString('gemini_api_key') ?? '';
+    final controller = TextEditingController(text: currentKey);
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Gemini API Key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'To avoid free quota exhaustion, please use your own Gemini API key.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () {
+                // Ideally launch URL: https://aistudio.google.com/app/apikey
+              },
+              child: const Text(
+                'Get a free key here:\nhttps://aistudio.google.com/app/apikey',
+                style: TextStyle(fontSize: 13, color: Colors.blue, decoration: TextDecoration.none),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'API Key',
+                border: OutlineInputBorder(),
+                hintText: 'AIza...',
+              ),
+              obscureText: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await prefs.setString('gemini_api_key', controller.text.trim());
+              if (mounted) Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getFriendlyLanguageName(String? locale) {
+    if (locale == null) return 'Default';
+    final l = locale.toLowerCase();
+    if (l.startsWith('en-us')) return 'English (US)';
+    if (l.startsWith('en-gb')) return 'English (UK)';
+    if (l.startsWith('en-au')) return 'English (Australia)';
+    if (l.startsWith('en-in')) return 'English (India)';
+    if (l.startsWith('fr-fr')) return 'French (France)';
+    if (l.startsWith('es-es')) return 'Spanish (Spain)';
+    if (l.startsWith('es-us')) return 'Spanish (US)';
+    if (l.startsWith('de-de')) return 'German (Germany)';
+    if (l.startsWith('it-it')) return 'Italian (Italy)';
+    if (l.startsWith('ja-jp')) return 'Japanese (Japan)';
+    if (l.startsWith('ko-kr')) return 'Korean (Korea)';
+    if (l.startsWith('hi-in')) return 'Hindi (India)';
+    return locale.toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -454,6 +559,18 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
                           color: theme.textTheme.bodyLarge?.color,
                         ),
                         overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _showApiKeyDialog,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.outlineVariant,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.vpn_key_rounded, size: 18, color: theme.textTheme.bodyMedium?.color),
                       ),
                     ),
                     GestureDetector(
@@ -518,11 +635,33 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
 
   Widget _buildReadAloudTab(ScrollController scrollController) {
     final theme = Theme.of(context);
+    final hasSelectedText = widget.selectedText != null && widget.selectedText!.isNotEmpty;
+    
     return SingleChildScrollView(
       controller: _tabController.index == 0 ? scrollController : null,
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
+          if (hasSelectedText)
+            Container(
+              margin: const EdgeInsets.only(bottom: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primaryContainer.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.info_outline_rounded, size: 16, color: theme.colorScheme.onPrimaryContainer),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Reading selected text only',
+                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onPrimaryContainer, fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -578,11 +717,14 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
             child: DropdownButtonHideUnderline(
               child: DropdownButton<Map<String, String>>(
                 value: _selectedVoice,
-                items: TtsService.voices.map((voice) {
+                items: TtsService.voices.asMap().entries.map((entry) {
+                  final index = entry.key + 1;
+                  final voice = entry.value;
+                  final friendlyName = _getFriendlyLanguageName(voice['locale']);
                   return DropdownMenuItem(
                     value: voice,
                     child: Text(
-                      '${voice['name']} (${voice['locale']})',
+                      '$friendlyName - Voice $index',
                       style: TextStyle(fontSize: 13, color: theme.textTheme.bodyMedium?.color),
                     ),
                   );
@@ -605,6 +747,72 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
     );
   }
 
+  Widget _buildAiLimitControls() {
+    if (_estimatedTotalPages <= 3) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.errorContainer.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: theme.colorScheme.error.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 20, color: theme.colorScheme.error),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Large document detected (~$_estimatedTotalPages pages). Max 10 pages allowed at once.\nPlease select the start and end pages to process.',
+                  style: TextStyle(fontSize: 12, color: theme.colorScheme.onErrorContainer),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Page Range (Max 10):', style: TextStyle(fontSize: 13, color: theme.textTheme.bodyMedium?.color)),
+            Text('${_pageRange.start.toInt()} - ${_pageRange.end.toInt()} / $_estimatedTotalPages', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+          ],
+        ),
+        RangeSlider(
+          values: _pageRange,
+          min: 1,
+          max: _estimatedTotalPages.toDouble(),
+          divisions: _estimatedTotalPages > 1 ? _estimatedTotalPages - 1 : 1,
+          onChanged: (val) {
+            RangeValues newRange = val;
+            if (newRange.end - newRange.start > 9) {
+              bool justHitLimit = (_pageRange.end - _pageRange.start <= 9);
+              if (newRange.start != _pageRange.start) {
+                newRange = RangeValues(newRange.start, newRange.start + 9);
+              } else {
+                newRange = RangeValues(newRange.end - 9, newRange.end);
+              }
+              if (justHitLimit) {
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Maximum 10 pages allowed at once. Range adjusted.'), duration: Duration(seconds: 2)),
+                );
+              }
+            }
+            setState(() {
+              _pageRange = newRange;
+              if (_summary.isNotEmpty) _summary = '';
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
   Widget _buildSummarizeTab(ScrollController scrollController) {
     final theme = Theme.of(context);
     return SingleChildScrollView(
@@ -614,6 +822,7 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          _buildAiLimitControls(),
           Row(
             children: [
               SizedBox(
@@ -810,16 +1019,28 @@ class _DocumentActionPopupState extends State<DocumentActionPopup>
 
   Widget _buildAskTab(ScrollController scrollController) {
     final theme = Theme.of(context);
+    final bool showLimits = _estimatedTotalPages > 3;
+    final int extraItems = showLimits ? 1 : 0;
+    
     return Column(
       children: [
         Expanded(
           child: ListView.builder(
             controller: _tabController.index == 2 ? scrollController : null,
             padding: const EdgeInsets.all(24),
-            itemCount: _chatHistory.length + (_loadingAnswer ? 1 : 0),
+            itemCount: _chatHistory.length + (_loadingAnswer ? 1 : 0) + extraItems,
             itemBuilder: (context, index) {
-              if (index == _chatHistory.length) return _buildLoadingBubble();
-              final msg = _chatHistory[index];
+              if (showLimits && index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: _buildAiLimitControls(),
+                );
+              }
+              
+              final msgIndex = index - extraItems;
+              if (msgIndex == _chatHistory.length) return _buildLoadingBubble();
+              
+              final msg = _chatHistory[msgIndex];
               return _buildChatBubble(msg['role']!, msg['text']!);
             },
           ),

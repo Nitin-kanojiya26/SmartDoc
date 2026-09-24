@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:smartdoc/services/reading_progress_service.dart';
 import 'package:smartdoc/widgets/document_action_popup.dart';
+import 'package:smartdoc/services/tts_service.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 class PdfViewerScreen extends StatefulWidget {
@@ -32,6 +33,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   String? _error;
   int _currentPage = 1;
   int _totalPages = 1;
+  final ValueNotifier<String?> _selectedPdfText = ValueNotifier<String?>(null);
 
   @override
   void initState() {
@@ -112,6 +114,21 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          ValueListenableBuilder<String?>(
+            valueListenable: _selectedPdfText,
+            builder: (context, selectedText, child) {
+              if (selectedText != null && selectedText.isNotEmpty) {
+                return IconButton(
+                  icon: const Icon(Icons.volume_up_rounded, color: Colors.blueAccent),
+                  tooltip: 'Read Selected Text',
+                  onPressed: () async {
+                    await TtsService.speak(selectedText);
+                  },
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.ios_share_rounded),
             onPressed: _downloadPdf,
@@ -128,6 +145,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                   child: DocumentActionPopup(
                     fileName: widget.fileName,
                     extractedText: widget.extractedText,
+                    selectedText: _selectedPdfText.value,
                     onClose: () => Navigator.pop(context),
                   ),
                 ),
@@ -166,6 +184,16 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                   });
                   _saveCurrentProgress();
                 },
+                onTextSelectionChanged: (PdfTextSelectionChangedDetails details) {
+                  if (details.selectedText == null && _selectedPdfText.value != null) {
+                     // small delay to avoid flicker if they are just adjusting selection
+                     Future.delayed(const Duration(milliseconds: 100), () {
+                        _selectedPdfText.value = details.selectedText;
+                     });
+                  } else {
+                     _selectedPdfText.value = details.selectedText;
+                  }
+                },
               );
 
               if (Theme.of(context).brightness == Brightness.dark) {
@@ -196,6 +224,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               child: DocumentActionPopup(
                 fileName: widget.fileName,
                 extractedText: widget.extractedText,
+                selectedText: _selectedPdfText.value,
                 onClose: () => Navigator.pop(context),
               ),
             ),
@@ -264,6 +293,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   void dispose() {
     _saveCurrentProgress();
     _controller.dispose();
+    _selectedPdfText.dispose();
     super.dispose();
   }
 }

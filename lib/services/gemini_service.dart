@@ -1,23 +1,31 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class GeminiService {
-  static String get apiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
-
   static const String modelName = 'gemini-2.5-flash';
 
-  static Uri _getApiUri() {
+  static Future<String> getApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final customKey = prefs.getString('gemini_api_key') ?? '';
+    if (customKey.isNotEmpty) return customKey;
+    return dotenv.env['GEMINI_API_KEY'] ?? '';
+  }
+
+  static Future<Uri> _getApiUri() async {
+    final key = await getApiKey();
     return Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey',
+      'https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$key',
     );
   }
 
   static Future<String> summarizeText(String documentText) async {
-    if (apiKey.isEmpty || apiKey.startsWith('YOUR_')) {
-      return '⚠️ Please set a valid Gemini API key in gemini_service.dart.';
+    final key = await getApiKey();
+    if (key.isEmpty || key.startsWith('YOUR_')) {
+      return '⚠️ Please provide your free Gemini API key.\n\nTo get a free key:\n1. Go to https://aistudio.google.com/app/apikey\n2. Create an API key\n3. Add it to the app settings or .env file.';
     }
-    if (!apiKey.startsWith('AIza')) {
+    if (!key.startsWith('AIza')) {
       return '⚠️ Invalid API Key format. Gemini API keys start with "AIza".';
     }
     if (documentText.trim().isEmpty) {
@@ -26,7 +34,7 @@ class GeminiService {
 
     try {
       final prompt =
-          'Provide a comprehensive and detailed summary of the following document. Include all key information, major themes, and important takeaways:\n\n$documentText';
+          'Provide a highly professional and structured summary of the following document. Use clear headings, bullet points for key takeaways, and ensure a formal tone. Extract the core essence, major themes, and actionable insights if any:\n\n$documentText';
       return await _sendRequest(prompt);
     } catch (e) {
       return 'Error generating summary: $e';
@@ -34,8 +42,9 @@ class GeminiService {
   }
 
   static Future<String> askQuestion(String documentText, String question) async {
-    if (apiKey.isEmpty || apiKey.startsWith('YOUR_')) {
-      return '⚠️ Please set a valid Gemini API key in gemini_service.dart.';
+    final key = await getApiKey();
+    if (key.isEmpty || key.startsWith('YOUR_')) {
+      return '⚠️ Please provide your free Gemini API key.\n\nTo get a free key:\n1. Go to https://aistudio.google.com/app/apikey\n2. Create an API key\n3. Add it to the app settings or .env file.';
     }
     if (question.trim().isEmpty) {
       return 'Please enter a valid question.';
@@ -43,7 +52,7 @@ class GeminiService {
 
     try {
       final prompt =
-          'Based on the following document, answer the question.\nIf the question is outside the scope of the document, explicitly and politely state that it is outside the scope of the provided document, but then provide a helpful answer or idea based on your general knowledge anyway.\n\nDocument:\n$documentText\n\nQuestion: $question';
+          'Based on the following document, answer the question in a professional manner.\nIf the question is outside the scope of the document, explicitly and politely state that it is outside the scope of the provided document, but then provide a helpful answer or idea based on your general knowledge anyway.\n\nDocument:\n$documentText\n\nQuestion: $question';
       return await _sendRequest(prompt);
     } catch (e) {
       return 'Error answering question: $e';
@@ -61,8 +70,9 @@ class GeminiService {
       ]
     };
 
+    final uri = await _getApiUri();
     final response = await http.post(
-      _getApiUri(),
+      uri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(payload),
     );

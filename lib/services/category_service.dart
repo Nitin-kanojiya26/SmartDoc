@@ -13,7 +13,7 @@ class CategoryService {
       'web', 'api', 'database', 'sql', 'algorithm', 'data structure',
       'machine learning', 'ai', 'artificial intelligence', 'computer science',
       'software', 'developer', 'coding', 'script', 'cyber', 'backend',
-      'frontend', 'devops', 'cloud', 'github', 'open source', 'app'
+      'frontend', 'devops', 'cloud', 'github', 'open source', 'app' , 'git'
     ],
     'Business': [
       'business', 'market', 'finance', 'account', 'economics', 'management',

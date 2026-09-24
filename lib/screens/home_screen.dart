@@ -590,14 +590,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             itemBuilder: (context, index) {
         final category = categories[index];
         final docs = _categoryGroups[category]!;
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Material(
             color: Theme.of(context).cardTheme.color,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-          ),
-          child: ListTile(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+            ),
+            child: ListTile(
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             leading: Icon(_getCategoryIcon(category), size: 22),
             title: Text(category, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
@@ -718,14 +719,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         final progress = snapshot.data ?? 0.0;
         return GestureDetector(
           onLongPress: () => _showReCategorizeDialog(doc),
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            decoration: BoxDecoration(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Material(
               color: Theme.of(context).cardTheme.color,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-            ),
-            child: Column(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+              ),
+              child: Column(
               children: [
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
