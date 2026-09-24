@@ -609,6 +609,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             trailing: const Icon(Icons.chevron_right_rounded, size: 20, color: Colors.grey),
             onTap: () => _showCategoryDocs(category, docs),
           ),
+        ),
         );
       },
     ),
@@ -770,6 +771,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 const SizedBox(height: 6),
               ],
             ),
+          ),
           ),
         );
       },
